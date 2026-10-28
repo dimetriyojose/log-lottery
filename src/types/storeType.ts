@@ -47,6 +47,13 @@ export interface IMusic {
     url: string | Blob | ArrayBuffer
 }
 
+export interface ISoundEffect {
+    id: string
+    name: string
+    type: string
+    volume: number
+}
+
 export interface IImage {
     id: string
     name: string

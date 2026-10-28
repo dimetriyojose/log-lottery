@@ -1,7 +1,7 @@
 <script setup lang='ts'>
 import { useI18n } from 'vue-i18n'
 import GridWaterfall from '@/components/Waterfall/index.vue'
-import { AbilitySetting, DataSetting, LayoutSetting, PatternSetting, TextSetting, ThemeSetting } from './parts'
+import { AbilitySetting, DataSetting, LayoutSetting, PatternSetting, SoundEffectSetting, TextSetting, ThemeSetting } from './parts'
 import { useViewModel } from './useViewModel'
 
 const { t } = useI18n()
@@ -89,6 +89,7 @@ const {
       />
       <!-- 功能设置 -->
       <AbilitySetting v-model:definite-time="definiteTimeValue" v-model:win-music="isWinMusicValue" />
+      <SoundEffectSetting />
     </GridWaterfall>
     <!-- </div> -->
   </div>

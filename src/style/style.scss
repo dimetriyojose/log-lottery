@@ -18,7 +18,10 @@
         font-weight: bold;
         white-space: nowrap;
         overflow: hidden;
-        text-overflow: ellipsis;
+        text-overflow: clip;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         z-index: 2;
     }
 
@@ -50,7 +53,6 @@
         object-fit: cover;
     }
 }
-
 .lucky-element-card {
     cursor: default;
     user-select: none;

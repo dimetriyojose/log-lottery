@@ -1,7 +1,7 @@
 export const buttonEn = {
-    enterLottery: 'Enter Lottery',
+    enterLottery: 'ENTER RAFFLE',
     start: 'Start',
-    selectLucky: 'Draw the Lucky',
+    selectLucky: 'PICK LUCKY WINNER',
     continue: 'Continue',
     confirm: 'Confirm',
     cancel: 'Cancel',

@@ -15,12 +15,22 @@ import { CONFETTI_FIRE_MAX_COUNT, SINGLE_TIME_MAX_PERSON_COUNT } from '@/constan
 import { useElementPosition, useElementStyle } from '@/hooks/useElement'
 import i18n from '@/locales/i18n'
 import useStore from '@/store'
-import { selectCard } from '@/utils'
 import { rgba } from '@/utils/color'
+import { getAudioDbItem } from '@/utils/localforage'
 import { LotteryStatus } from './type'
 import { confettiFire, createSphereVertices, createTableVertices, getRandomElements, initTableData } from './utils'
+import { findParticipantCardIndex, getParticipantKey } from './utils/winner'
 
 const maxAudioLimit = 10
+
+interface ActiveDrawState {
+    sessionId: number
+    winners: IPersonConfig[]
+    winner: IPersonConfig | null
+    cardIndexes: number[]
+    winnerCardIndex: number | null
+}
+
 export function useViewModel() {
     const toast = useToast()
     // store里面存储的值
@@ -36,7 +46,6 @@ export function useViewModel() {
         getPatterColor: patternColor,
         getPatternList: patternList,
         getTextColor: textColor,
-        getLuckyColor: luckyColor,
         getCardSize: cardSize,
         getTextSize: textSize,
         getRowCount: rowCount,
@@ -45,6 +54,7 @@ export function useViewModel() {
         getTitleFontSyncGlobal: titleFontSyncGlobal,
         getDefiniteTime: definiteTime,
         getWinMusic: isPlayWinMusic,
+        getSoundEffects: soundEffects,
     } = storeToRefs(globalConfig)
     // three初始值
     const ballRotationY = ref(0)
@@ -73,9 +83,113 @@ export function useViewModel() {
     const isInitialDone = ref<boolean>(false)
     const animationFrameId = ref<any>(null)
     const playingAudios = ref<HTMLAudioElement[]>([])
+    const winnerResult = ref<IPersonConfig | null>(null)
+    const winnerResultVisible = ref(false)
+    const winnerResultClearTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+    const spinningSound = ref<HTMLAudioElement | null>(null)
+    const winnerSound = ref<HTMLAudioElement | null>(null)
+    const soundUrls = ref<string[]>([])
+    const soundRequestId = ref(0)
+    const winnerSoundPlayed = ref(false)
+    const activeDraw = ref<ActiveDrawState>({
+        sessionId: 0,
+        winners: [],
+        winner: null,
+        cardIndexes: [],
+        winnerCardIndex: null,
+    })
 
     // 抽奖音乐相关
     const lotteryMusic = ref<HTMLAudioElement | null>(null)
+
+    function clearWinnerResult() {
+        winnerResultVisible.value = false
+        if (winnerResultClearTimer.value) {
+            clearTimeout(winnerResultClearTimer.value)
+        }
+        winnerResultClearTimer.value = setTimeout(() => {
+            if (!winnerResultVisible.value) {
+                winnerResult.value = null
+            }
+            winnerResultClearTimer.value = null
+        }, 650)
+    }
+
+    function showWinnerResult(person: IPersonConfig) {
+        if (winnerResultClearTimer.value) {
+            clearTimeout(winnerResultClearTimer.value)
+            winnerResultClearTimer.value = null
+        }
+        winnerResult.value = person
+        winnerResultVisible.value = true
+    }
+
+    function resetActiveDraw() {
+        activeDraw.value = {
+            sessionId: activeDraw.value.sessionId + 1,
+            winners: [],
+            winner: null,
+            cardIndexes: [],
+            winnerCardIndex: null,
+        }
+    }
+
+    function findCardForParticipant(person: IPersonConfig, excludedIndexes: number[]) {
+        const participantKey = getParticipantKey(person)
+        const cardKeys = objects.value.map(object => object.cardParticipantKey || '')
+        return findParticipantCardIndex(cardKeys, participantKey, excludedIndexes)
+    }
+
+    function stopConfiguredSound(audioRef: typeof spinningSound) {
+        const audio = audioRef.value
+        if (audio) {
+            audio.pause()
+            audio.src = ''
+            audioRef.value = null
+        }
+    }
+
+    function stopConfiguredSounds() {
+        soundRequestId.value++
+        stopConfiguredSound(spinningSound)
+        stopConfiguredSound(winnerSound)
+        soundUrls.value.forEach(url => URL.revokeObjectURL(url))
+        soundUrls.value = []
+    }
+
+    async function playConfiguredSound(kind: 'spinning' | 'winner') {
+        if (!soundEffects.value.enabled) {
+            return
+        }
+        const config = soundEffects.value[kind]
+        if (!config) {
+            return
+        }
+        const requestId = ++soundRequestId.value
+        const audioRef = kind === 'spinning' ? spinningSound : winnerSound
+        stopConfiguredSound(audioRef)
+        try {
+            const blob = await getAudioDbItem(config.id)
+            if (!blob || requestId !== soundRequestId.value) {
+                return
+            }
+            const url = URL.createObjectURL(blob)
+            const audio = new Audio(url)
+            audio.volume = Math.max(0, Math.min(100, config.volume)) / 100
+            audio.loop = kind === 'spinning'
+            audio.onended = () => {
+                audioRef.value = null
+                URL.revokeObjectURL(url)
+                soundUrls.value = soundUrls.value.filter(item => item !== url)
+            }
+            audioRef.value = audio
+            soundUrls.value.push(url)
+            await audio.play()
+        }
+        catch (error) {
+            console.warn(`Unable to play ${kind} sound effect`, error)
+        }
+    }
 
     function initThreeJs() {
         const felidView = 40
@@ -160,7 +274,13 @@ export function useViewModel() {
                 mod: 'default',
             },
             )
-            const object = new CSS3DObject(element)
+            // Animate a wrapper so the card's fitted text and internal layout stay rigid.
+            const cardWrapper = document.createElement('div')
+            cardWrapper.className = 'element-card-wrapper'
+            cardWrapper.appendChild(element)
+            const object = new CSS3DObject(cardWrapper)
+            ;(object as any).cardElement = element
+            ;(object as any).cardParticipantKey = getParticipantKey(tableData.value[i])
             object.position.x = Math.random() * 4000 - 2000
             object.position.y = Math.random() * 4000 - 2000
             object.position.z = Math.random() * 4000 - 2000
@@ -211,23 +331,6 @@ export function useViewModel() {
                     .easing(TWEEN.Easing.Exponential.InOut)
                     .start()
                     .onComplete(() => {
-                        if (luckyCardList.value.length) {
-                            luckyCardList.value.forEach((cardIndex: any) => {
-                                const item = objects.value[cardIndex]
-                                useElementStyle({
-                                    element: item.element,
-                                    person: {} as any,
-                                    index: i,
-                                    patternList: patternList.value,
-                                    patternColor: patternColor.value,
-                                    cardColor: cardColor.value,
-                                    cardSize: cardSize.value,
-                                    scale: 1,
-                                    textSize: textSize.value,
-                                    mod: 'sphere',
-                                })
-                            })
-                        }
                         luckyTargets.value = []
                         luckyCardList.value = []
                         canOperate.value = true
@@ -450,8 +553,12 @@ export function useViewModel() {
             return
         }
 
+        clearWinnerResult()
+        resetActiveDraw()
+
         // 重置音频状态
         resetAudioState()
+        stopConfiguredSounds()
 
         // 预加载音频资源以解决浏览器自动播放策略
         try {
@@ -470,7 +577,7 @@ export function useViewModel() {
         if (patternList.value.length) {
             for (let i = 0; i < patternList.value.length; i++) {
                 if (i < rowCount.value * 7) {
-                    objects.value[patternList.value[i] - 1].element.style.backgroundColor = rgba(cardColor.value, Math.random() * 0.5 + 0.25)
+                    objects.value[patternList.value[i] - 1].cardElement.style.backgroundColor = rgba(cardColor.value, Math.random() * 0.5 + 0.25)
                 }
             }
         }
@@ -526,7 +633,16 @@ export function useViewModel() {
         }
         luckyCount.value = leftover < luckyCount.value ? leftover : luckyCount.value
         // 重构抽奖函数
-        luckyTargets.value = getRandomElements(personPool.value, luckyCount.value)
+        const selectedTargets = getRandomElements(personPool.value, luckyCount.value)
+        const winnerSnapshots = selectedTargets.map(person => Object.freeze({ ...person }) as IPersonConfig)
+        activeDraw.value = {
+            sessionId: activeDraw.value.sessionId + 1,
+            winners: winnerSnapshots,
+            winner: winnerSnapshots[0] || null,
+            cardIndexes: [],
+            winnerCardIndex: null,
+        }
+        luckyTargets.value = selectedTargets
         luckyTargets.value.forEach((item) => {
             const index = personPool.value.findIndex(person => person.id === item.id)
             if (index > -1) {
@@ -544,6 +660,8 @@ export function useViewModel() {
 
         // 开始播放抽奖音乐
         startLotteryMusic()
+        winnerSoundPlayed.value = false
+        void playConfiguredSound('spinning')
 
         currentStatus.value = LotteryStatus.running
         rollBall(10, 3000)
@@ -559,7 +677,8 @@ export function useViewModel() {
      * @description: 停止抽奖，抽出幸运人
      */
     async function stopLottery() {
-        if (!canOperate.value) {
+        const draw = activeDraw.value
+        if (!canOperate.value || currentStatus.value !== LotteryStatus.running || !draw.winner) {
             return
         }
         // 停止抽奖音乐
@@ -574,12 +693,22 @@ export function useViewModel() {
         rollBall(0, 1)
 
         const windowSize = { width: window.innerWidth, height: window.innerHeight }
-        luckyTargets.value.forEach((person: IPersonConfig, index: number) => {
-            const cardIndex = selectCard(luckyCardList.value, tableData.value.length, person.id)
+        const drawCardIndexes = draw.winners.map(person => findCardForParticipant(person, [...luckyCardList.value]))
+        const missingCardIndex = drawCardIndexes.findIndex(cardIndex => cardIndex < 0)
+        if (missingCardIndex >= 0) {
+            console.warn(`Unable to locate sphere card for participant ${getParticipantKey(draw.winners[missingCardIndex])}`)
+            canOperate.value = true
+            currentStatus.value = LotteryStatus.end
+            return
+        }
+        draw.cardIndexes = drawCardIndexes
+        draw.winnerCardIndex = drawCardIndexes[0] ?? null
+        draw.winners.forEach((person: IPersonConfig, index: number) => {
+            const cardIndex = drawCardIndexes[index]
             luckyCardList.value.push(cardIndex)
             const totalLuckyCount = luckyTargets.value.length
             const item = objects.value[cardIndex]
-            const { xTable, yTable, scale } = useElementPosition(
+            const { xTable, yTable } = useElementPosition(
                 item,
                 rowCount.value,
                 totalLuckyCount,
@@ -594,22 +723,11 @@ export function useViewModel() {
                     z: 1000,
                 }, 1200)
                 .easing(TWEEN.Easing.Exponential.InOut)
-                .onStart(() => {
-                    item.element = useElementStyle({
-                        element: item.element,
-                        person,
-                        index: cardIndex,
-                        patternList: patternList.value,
-                        patternColor: patternColor.value,
-                        cardColor: luckyColor.value,
-                        cardSize: { width: cardSize.value.width, height: cardSize.value.height },
-                        scale,
-                        textSize: textSize.value,
-                        mod: 'lucky',
-                    })
-                })
                 .start()
                 .onComplete(() => {
+                    if (activeDraw.value.sessionId !== draw.sessionId) {
+                        return
+                    }
                     canOperate.value = true
                     currentStatus.value = LotteryStatus.end
                 })
@@ -622,9 +740,18 @@ export function useViewModel() {
                 .easing(TWEEN.Easing.Exponential.InOut)
                 .start()
                 .onComplete(() => {
-                    playWinMusic()
+                    if (activeDraw.value.sessionId !== draw.sessionId) {
+                        return
+                    }
+                    if (cardIndex === draw.winnerCardIndex && !winnerSoundPlayed.value) {
+                        winnerSoundPlayed.value = true
+                        stopConfiguredSound(spinningSound)
+                        void playConfiguredSound('winner')
+                        showWinnerResult(draw.winner!)
+                        playWinMusic()
+                        resetCamera()
+                    }
                     confettiFire(index, CONFETTI_FIRE_MAX_COUNT)
-                    resetCamera()
                 })
         })
     }
@@ -704,6 +831,9 @@ export function useViewModel() {
     function quitLottery() {
         // 停止抽奖音乐
         stopLotteryMusic()
+        stopConfiguredSounds()
+        clearWinnerResult()
+        resetActiveDraw()
 
         enterLottery()
         currentStatus.value = LotteryStatus.init
@@ -734,8 +864,9 @@ export function useViewModel() {
                 if (!objects.value[cardRandomIndexArr[i]]) {
                     continue
                 }
-                objects.value[cardRandomIndexArr[i]].element = useElementStyle({
-                    element: objects.value[cardRandomIndexArr[i]].element,
+                const object = objects.value[cardRandomIndexArr[i]]
+                object.cardElement = useElementStyle({
+                    element: object.cardElement,
                     person: allPersonList.value[personRandomIndexArr[i]],
                     index: cardRandomIndexArr[i],
                     patternList: patternList.value,
@@ -747,6 +878,7 @@ export function useViewModel() {
                     mod,
                     type: 'change',
                 })
+                object.cardParticipantKey = getParticipantKey(allPersonList.value[personRandomIndexArr[i]])
             }
         }, 200)
     }
@@ -784,6 +916,11 @@ export function useViewModel() {
      * @description: 清理资源，避免内存溢出
      */
     function cleanup() {
+        if (winnerResultClearTimer.value) {
+            clearTimeout(winnerResultClearTimer.value)
+            winnerResultClearTimer.value = null
+        }
+
         // 停止所有Tween动画
         TWEEN.removeAll()
 
@@ -796,6 +933,9 @@ export function useViewModel() {
 
         // 停止抽奖音乐
         stopLotteryMusic()
+        stopConfiguredSounds()
+        clearWinnerResult()
+        resetActiveDraw()
 
         // 清理所有音频资源
         playingAudios.value.forEach((audio) => {
@@ -899,6 +1039,8 @@ export function useViewModel() {
         setDefaultPersonList,
         startLottery,
         continueLottery,
+        winnerResult,
+        winnerResultVisible,
         quitLottery,
         containerRef,
         stopLottery,

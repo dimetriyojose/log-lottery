@@ -15,8 +15,43 @@ interface IUseElementStyle {
     type?: 'add' | 'change'
 
 }
+
+function getFittedNameFontSize(name: string, maxFontSize: number, width: number) {
+    if (!name || width <= 0 || typeof document === 'undefined') {
+        return maxFontSize
+    }
+
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('2d')
+    if (!context) {
+        return maxFontSize
+    }
+    const measureContext = context
+    const fontFamily = getComputedStyle(document.body).fontFamily || 'sans-serif'
+    const minFontSize = 8
+
+    function fits(fontSize: number) {
+        measureContext.font = `700 ${fontSize}px ${fontFamily}`
+        return measureContext.measureText(name).width <= width
+    }
+
+    let low = minFontSize
+    let high = Math.max(minFontSize, maxFontSize)
+    while (low < high) {
+        const candidate = Math.ceil((low + high) / 2)
+        if (fits(candidate)) {
+            low = candidate
+        }
+        else {
+            high = candidate - 1
+        }
+    }
+    return low
+}
+
 export function useElementStyle(props: IUseElementStyle) {
     const { element, person, index, patternList, patternColor, cardColor, cardSize, scale, textSize, mod, type } = props
+    const isWinner = mod === 'lucky'
     if (patternList.includes(index + 1) && mod === 'default') {
         element.style.backgroundColor = rgba(patternColor, Math.random() * 0.2 + 0.8)
     }
@@ -53,8 +88,16 @@ export function useElementStyle(props: IUseElementStyle) {
         element.children[0].textContent = person.uid
     }
 
-    element.children[1].style.fontSize = `${textSize * scale}px`
-    element.children[1].style.lineHeight = `${textSize * scale * 3}px`
+    const nameElement = element.children[1] as HTMLElement
+    const nameAreaWidth = Math.max(24, cardSize.width * scale - 20)
+    const nameFontSize = isWinner
+        ? textSize * scale
+        : getFittedNameFontSize(person.name || '', textSize * scale, nameAreaWidth)
+    nameElement.style.fontSize = `${nameFontSize}px`
+    nameElement.style.lineHeight = mod === 'lucky' ? `${textSize * scale * 3}px` : `${nameFontSize * 1.2}px`
+    if (mod !== 'lucky') {
+        nameElement.style.maxWidth = `${nameAreaWidth}px`
+    }
     element.children[1].style.textShadow = `0 0 12px ${rgba(cardColor, 0.95)}`
     if (person.name) {
         element.children[1].textContent = person.name
@@ -67,6 +110,7 @@ export function useElementStyle(props: IUseElementStyle) {
         element.children[2].innerHTML = `${person.department ? person.department : ''}<br/>${person.identity ? person.identity : ''}`
     }
     element.children[3].src = person.avatar
+
     return element
 }
 interface CardRule {

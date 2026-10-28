@@ -1,4 +1,4 @@
-import type { IImage, IMusic } from '@/types/storeType'
+import type { IImage, IMusic, ISoundEffect } from '@/types/storeType'
 import { defineStore } from 'pinia'
 import i18n, { browserLanguage } from '@/locales/i18n'
 import { defaultImageList, defaultMusicList, defaultPatternList } from './data'
@@ -14,6 +14,11 @@ export const useGlobalConfig = defineStore('global', {
                 language: browserLanguage,
                 definiteTime: null as number | null,
                 winMusic: false,
+                soundEffects: {
+                    enabled: false,
+                    spinning: null as ISoundEffect | null,
+                    winner: null as ISoundEffect | null,
+                },
                 theme: {
                     name: 'dracula',
                     detail: { primary: '#0f5fd3' },
@@ -135,10 +140,22 @@ export const useGlobalConfig = defineStore('global', {
         getWinMusic(state) {
             return state.globalConfig.winMusic
         },
+        getSoundEffects(state) {
+            return state.globalConfig.soundEffects ?? {
+                enabled: false,
+                spinning: null,
+                winner: null,
+            }
+        },
     },
     actions: {
         // 设置全局配置
         setGlobalConfig(data: any) {
+            data.soundEffects ??= {
+                enabled: false,
+                spinning: null,
+                winner: null,
+            }
             this.globalConfig = data
         },
         // 设置rowCount
@@ -284,11 +301,31 @@ export const useGlobalConfig = defineStore('global', {
         setIsPlayWinMusic(winMusic: boolean) {
             this.globalConfig.winMusic = winMusic
         },
+        setSoundEffectsEnabled(enabled: boolean) {
+            this.globalConfig.soundEffects ??= { enabled: false, spinning: null, winner: null }
+            this.globalConfig.soundEffects.enabled = enabled
+        },
+        setSoundEffect(kind: 'spinning' | 'winner', soundEffect: ISoundEffect | null) {
+            this.globalConfig.soundEffects ??= { enabled: false, spinning: null, winner: null }
+            this.globalConfig.soundEffects[kind] = soundEffect
+        },
+        setSoundEffectVolume(kind: 'spinning' | 'winner', volume: number) {
+            this.globalConfig.soundEffects ??= { enabled: false, spinning: null, winner: null }
+            const soundEffect = this.globalConfig.soundEffects[kind]
+            if (soundEffect) {
+                soundEffect.volume = volume
+            }
+        },
         // 重置所有配置
         reset() {
             this.globalConfig = {
                 rowCount: 17,
                 winMusic: false,
+                soundEffects: {
+                    enabled: false,
+                    spinning: null,
+                    winner: null,
+                },
                 isSHowPrizeList: true,
                 isShowAvatar: false,
                 topTitle: i18n.global.t('data.defaultTitle'),
